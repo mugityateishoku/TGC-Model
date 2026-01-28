@@ -60,7 +60,7 @@ This repository contains the simulation code demonstrating that psychiatric phen
 
 ```bash
 
-git clone \[https://github.com/YOUR\_USERNAME/TGC-Model.git](https://github.com/YOUR\_USERNAME/TGC-Model.git)
+git clone https://github.com/mugityateishoku/TGC-Model.git
 
 cd TGC-Model
 
