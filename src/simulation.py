@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-class TGCAgentV5:
+class TGCAgent:
     def __init__(self, omega, name, color):
         """
         Thermostatic Gain Control (TGC) Model Agent
@@ -64,13 +64,13 @@ def run_catastrophe_forcing_protocol():
     # 1. Define the Agents based on Topological Traits (\Omega)
     agents = [
         # ADHD-like: Low \Omega (Shallow basins, no bistability, noise-driven)
-        TGCAgentV5(omega=0.5, name="ADHD-like (Low $\Omega$)", color="red"),
+        TGCAgent(omega=0.5, name="ADHD-like (Low $\Omega$)", color="red"),
         
         # Neurotypical: Moderate \Omega
-        TGCAgentV5(omega=1.5, name="Neurotypical (Mid $\Omega$)", color="blue"),
+        TGCAgent(omega=1.5, name="Neurotypical (Mid $\Omega$)", color="blue"),
         
         # ASD-like: High \Omega (Deep hysteresis, hyper-systemizing, sudden meltdowns)
-        TGCAgentV5(omega=3.0, name="ASD-like (High $\Omega$)", color="green")
+        TGCAgent(omega=3.0, name="ASD-like (High $\Omega$)", color="green")
     ]
     
     # 2. Construct the CFP "Stress Ramp" (Input Drive E)
