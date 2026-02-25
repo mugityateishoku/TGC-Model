@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 class TGCAgentV5:
     def __init__(self, omega, name, color):
         """
-        Thermostatic Gain Control (TGC) Model 5.0 Agent
+        Thermostatic Gain Control (TGC) Model Agent
         omega (\Omega): Stability Factor (Trait parameter controlling topology)
         """
         self.omega = omega
