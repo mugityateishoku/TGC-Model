@@ -1,103 +1,122 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-np.random.seed(42)
-
-class TGCAgent:
-    def __init__(self, alpha, tau_init, gamma, theta, beta, decay_rate, name, color, is_static=False):
-        self.q = np.array([0.5, 0.5])
-        self.tau = tau_init
-        self.alpha = alpha
-        self.gamma = gamma       # Cooling rate
-        self.theta = theta       # Re-heating threshold
-        self.beta = beta         # Re-heating amount
-        self.decay_rate = decay_rate # Leaky integrator decay
+class TGCAgentV5:
+    def __init__(self, omega, name, color):
+        """
+        Thermostatic Gain Control (TGC) Model 5.0 Agent
+        omega (\Omega): Stability Factor (Trait parameter controlling topology)
+        """
+        self.omega = omega
         self.name = name
         self.color = color
-        self.is_static = is_static # For baseline agent
         
-        self.cum_error = 0.0
-        self.entropy_history = []
-
-    def softmax(self, q, tau):
-        q_stab = q - np.max(q)
-        exp_q = np.exp(q_stab / tau)
-        return exp_q / np.sum(exp_q)
-
-    def select_action(self):
-        probs = self.softmax(self.q, self.tau)
-        entropy = -np.sum(probs * np.log(probs + 1e-10))
-        self.entropy_history.append(entropy)
-        return np.random.choice([0, 1], p=probs)
-
-    def update(self, action, reward):
-        # 1. Standard Q-learning update
-        prediction_error = reward - self.q[action]
-        self.q[action] += self.alpha * prediction_error
+        # Initialize latent state x at the stable baseline for E=0
+        initial_roots = self._get_stable_roots(E=0)
+        self.x = max(initial_roots) if initial_roots else 0.0
         
-        if self.is_static:
-            return # Static agent does not change tau
+        self.x_history = []
+        self.beta_history = []
 
-        # 2. Thermostatic Gain Control (TGC)
+    def _get_stable_roots(self, E):
+        """
+        Solves x^3 - \Omega*x - E = 0 and filters for local minima.
+        """
+        # Coefficients for x^3 + 0*x^2 - \Omega*x - E = 0
+        coeffs = [1.0, 0.0, -self.omega, -E]
+        roots = np.roots(coeffs)
         
-        # A. Stabilization (Freezing)
-        if reward > 0:
-            self.tau = max(0.01, self.tau * self.gamma)
+        # Extract purely real roots
+        real_roots = roots[np.isclose(roots.imag, 0)].real
+        
+        # Filter for local minima: d^2V/dx^2 = 3x^2 - \Omega > 0
+        stable_roots = [r for r in real_roots if 3 * r**2 - self.omega > 0]
+        return stable_roots
 
-        # B. Destabilization (Melting) with Leaky Integrator
-        # 負の予測誤差の絶対値を蓄積するが、同時に時間減衰させる
-        if prediction_error < 0:
-            self.cum_error = (self.decay_rate * self.cum_error) + abs(prediction_error)
+    def update_state(self, E_t):
+        """
+        Applies the Adiabatic Assumption and Minimum-Distance Selection Rule.
+        """
+        stable_roots = self._get_stable_roots(E_t)
+        
+        if len(stable_roots) == 0:
+            # Fallback for numerical edge cases
+            new_x = self.x 
         else:
-            # エラーがない時も減衰させる（忘却）
-            self.cum_error = self.decay_rate * self.cum_error
+            # argmin_x |x - x_{t-1}^*|
+            distances = [abs(r - self.x) for r in stable_roots]
+            new_x = stable_roots[np.argmin(distances)]
+            
+        self.x = new_x
+        self.x_history.append(self.x)
         
-        # Threshold check
-        if self.cum_error > self.theta:
-            self.tau += self.beta
-            self.cum_error = 0.0 # Reset pressure
+        # Link function to strictly positive decision precision (beta)
+        beta_t = np.exp(self.x)
+        self.beta_history.append(beta_t)
+        
+        return beta_t
 
-def run_simulation_v2():
-    n_trials = 100
-    reversal_trial = 50
-    
+def run_catastrophe_forcing_protocol():
+    """
+    Simulates the 'Stress Ramp' to empirically demonstrate Hysteresis (A > 0)
+    and catastrophic bifurcations across different topological phenotypes.
+    """
+    # 1. Define the Agents based on Topological Traits (\Omega)
     agents = [
-        # Baseline: Static Agent (温度固定)
-        TGCAgent(alpha=0.3, tau_init=0.5, gamma=1.0, theta=999, beta=0, decay_rate=0, name="Static (Baseline)", color="gray", is_static=True),
-        # Healthy: 適切な冷却と、漏れのある積分器
-        TGCAgent(alpha=0.3, tau_init=1.0, gamma=0.85, theta=2.5, beta=1.5, decay_rate=0.9, name="Healthy (TGC)", color="blue"),
-        # ADHD-like: 冷却不全
-        TGCAgent(alpha=0.3, tau_init=1.0, gamma=0.99, theta=2.5, beta=1.5, decay_rate=0.9, name="ADHD-like", color="red"),
-        # ASD-like: 加熱不全 (閾値無限大) + 強力な冷却(gamma=0.6)
-        TGCAgent(alpha=0.3, tau_init=1.0, gamma=0.6, theta=9999, beta=1.5, decay_rate=0.9, name="ASD-like", color="green")
+        # ADHD-like: Low \Omega (Shallow basins, no bistability, noise-driven)
+        TGCAgentV5(omega=0.5, name="ADHD-like (Low $\Omega$)", color="red"),
+        
+        # Neurotypical: Moderate \Omega
+        TGCAgentV5(omega=1.5, name="Neurotypical (Mid $\Omega$)", color="blue"),
+        
+        # ASD-like: High \Omega (Deep hysteresis, hyper-systemizing, sudden meltdowns)
+        TGCAgentV5(omega=3.0, name="ASD-like (High $\Omega$)", color="green")
     ]
     
-    probs_phase1 = [0.8, 0.2]
-    probs_phase2 = [0.2, 0.8]
+    # 2. Construct the CFP "Stress Ramp" (Input Drive E)
+    # Ramping up from -4.0 to 4.0, then ramping back down to -4.0
+    E_ascending = np.linspace(-4.0, 4.0, 200)
+    E_descending = np.linspace(4.0, -4.0, 200)
+    E_sequence = np.concatenate([E_ascending, E_descending])
     
-    plt.figure(figsize=(10, 6))
+    # 3. Run Simulation
+    for agent in agents:
+        for E_t in E_sequence:
+            agent.update_state(E_t)
+            
+    # 4. Visualization
+    plt.figure(figsize=(12, 7))
     
     for agent in agents:
-        # Reset for consistency
-        np.random.seed(42) 
-        for t in range(n_trials):
-            current_probs = probs_phase1 if t < reversal_trial else probs_phase2
-            action = agent.select_action()
-            reward = 1 if np.random.rand() < current_probs[action] else 0
-            agent.update(action, reward)
-            
-        style = '--' if agent.is_static else '-'
-        width = 1.5 if agent.is_static else 2.5
-        alpha = 0.6 if agent.is_static else 0.9
-        plt.plot(agent.entropy_history, label=agent.name, color=agent.color, linestyle=style, linewidth=width, alpha=alpha)
+        # Split history into Ascending and Descending phases for plotting
+        beta_asc = agent.beta_history[:len(E_ascending)]
+        beta_desc = agent.beta_history[len(E_ascending):]
+        
+        # Plot ascending path (solid line)
+        plt.plot(E_ascending, beta_asc, color=agent.color, linestyle='-', linewidth=2.5, 
+                 label=f"{agent.name} - Ascending")
+        
+        # Plot descending path (dashed line) to reveal Hysteresis Loop area (A > 0)
+        plt.plot(E_descending, beta_desc, color=agent.color, linestyle='--', linewidth=2.5, alpha=0.7,
+                 label=f"{agent.name} - Descending")
+        
+        # Mark Theoretical Critical Points if bistable
+        if agent.omega > 0:
+            E_crit = np.sqrt((4 * agent.omega**3) / 27)
+            if E_crit <= 4.0:
+                plt.axvline(x=E_crit, color=agent.color, linestyle=':', alpha=0.5)
+                plt.axvline(x=-E_crit, color=agent.color, linestyle=':', alpha=0.5)
 
-    plt.axvline(x=reversal_trial, color='black', linestyle=':', label='Rule Reversal')
-    plt.title("Figure 1: Entropy Dynamics of TGC Model vs Static Baseline")
-    plt.xlabel("Trial (t)")
-    plt.ylabel("Action Entropy (Uncertainty)")
-    plt.legend()
+    plt.title("Figure 1: Catastrophe-Forcing Protocol (CFP)\nDynamical Signature of Structural Hysteresis ($A = \oint \\beta \, dE$)", fontsize=14)
+    plt.xlabel("Input Drive ($E_t$)", fontsize=12)
+    plt.ylabel("Decision Precision / Gain ($\\beta_t = \exp(x_t^*)$)", fontsize=12)
     plt.grid(True, alpha=0.3)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
+    
+    # Save for GitHub README
+    plt.savefig("figure1.png", dpi=300)
     plt.show()
 
-run_simulation_v2()
+if __name__ == "__main__":
+    run_catastrophe_forcing_protocol()
