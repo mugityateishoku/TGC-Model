@@ -1,10 +1,22 @@
 """
 TGC Model: Study 1 Section 3.1.2 — Pupil Overheating Signature
 ===============================================================
-ds003838 task-memory 瞳孔径 (n=86) を Load 5/9/13 条件別に解析。
-TGC予測: Load9でピーク→Load13で低下（非単調 = Overheating シグネチャ）
+Analyzes pupil diameter from the ds003838 task-memory dataset (n=86)
+across cognitive load conditions (Load 5 / 9 / 13).
 
-pupil.tsv 形式: Pupil Labs, timestamp ベースで events.tsv と同期
+TGC prediction: non-monotonic pattern — peak dilation at Load 9
+followed by suppression at Load 13 (Overheating signature).
+This reflects beta (LC-NE gain) tracking load up to the fold boundary
+and then collapsing under overload (Eq. 1, v29 paper).
+
+Data format: Pupil Labs pupil.tsv, timestamp-synchronized with events.tsv.
+
+Usage:
+    DS003838_DIR=/path/to/ds003838-download python study1_pupil.py
+
+Environment variables:
+    DS003838_DIR    — path to ds003838-download dataset (default: ./ds003838-download)
+    TGC_FIGURES_DIR — output directory for figures (default: ./figures)
 """
 
 import os, glob, warnings
@@ -20,22 +32,22 @@ EEG_DIR     = os.environ.get('DS003838_DIR', './ds003838-download')
 FIGURES_DIR = os.environ.get('TGC_FIGURES_DIR', './figures')
 os.makedirs(FIGURES_DIR, exist_ok=True)
 
-# 瞳孔計測の時間窓: シーケンス開始から何秒後を使うか
-# digit span: 1桁/2秒 × Load数 → Load5=10s, Load9=18s, Load13=26s
-# 維持期間（最後の桁提示後）の瞳孔径を使用
-BASELINE_WIN = (-1.0, 0.0)   # onset前1秒をベースライン
-MEASURE_WIN  = (0.5, None)   # onset後0.5秒〜シーケンス終了まで
+# Time windows for pupil measurement relative to sequence onset
+# digit span: 2 s per digit × load → Load5=10s, Load9=18s, Load13=26s
+# Using pupil diameter during the retention interval (after last digit)
+BASELINE_WIN = (-1.0, 0.0)   # 1 s before onset
+MEASURE_WIN  = (0.5, None)   # 0.5 s after onset to sequence end
 
 
 def load_pupil(pupil_tsv: str) -> pd.DataFrame:
-    """pupil.tsv を読み込み、有効な瞳孔径データを返す"""
+    """Load pupil.tsv and return valid pupil diameter data."""
     available = pd.read_csv(pupil_tsv, sep="\t", nrows=0).columns.tolist()
     diam_col = "diameter_3d" if "diameter_3d" in available else "diameter"
     ts_col   = "pupil_timestamp" if "pupil_timestamp" in available else available[0]
     conf_col = "confidence" if "confidence" in available else None
     usecols  = [c for c in [ts_col, diam_col, conf_col] if c]
 
-    # on_bad_lines='skip' で壊れた行を無視
+    # on_bad_lines='skip' to ignore malformed rows
     df = pd.read_csv(pupil_tsv, sep="\t", low_memory=False,
                      usecols=usecols, on_bad_lines="skip")
     df[ts_col]   = pd.to_numeric(df[ts_col],   errors="coerce")
@@ -53,8 +65,8 @@ def load_pupil(pupil_tsv: str) -> pd.DataFrame:
 
 def get_sequence_onsets(events_tsv: str):
     """
-    Load 5/9/13 のシーケンス開始 onset (秒) を返す。
-    memorize 条件のみ使用（control は除外）。
+    Return sequence onset times (s) for Load 5/9/13.
+    Only memorize trials are used (control excluded).
     """
     df = pd.read_csv(events_tsv, sep="\t")
     onsets = {5: [], 9: [], 13: []}
@@ -70,7 +82,7 @@ def get_sequence_onsets(events_tsv: str):
         for load in [5, 9, 13]:
             if f"/{load:02d}" in tt:
                 onsets[load].append(onset)
-                # シーケンス長 = load × 2秒 (各桁2秒間隔)
+                # sequence duration = load × 2 s (2 s per digit)
                 durations[load].append(load * 2.0)
                 break
     return onsets, durations
@@ -80,9 +92,9 @@ def extract_pupil_per_load(pupil_df: pd.DataFrame,
                             onsets: dict, durations: dict,
                             eeg_t0_unix: float):
     """
-    各 Load 条件のベースライン補正済み瞳孔径を計算。
-    per-trial baseline: 各シーケンス onset の -2〜0秒。
-    memory トライアルは onset~771s 以降のため pupil 範囲内に入る。
+    Compute baseline-corrected pupil diameter for each load condition.
+    Per-trial baseline: -2 to 0 s relative to each sequence onset.
+    Memory trials start at ~771 s into the recording, within pupil range.
     """
     results = {}
     for load in [5, 9, 13]:
@@ -94,15 +106,14 @@ def extract_pupil_per_load(pupil_df: pd.DataFrame,
         for onset, dur in zip(onsets[load], durations[load]):
             t0_unix = eeg_t0_unix + onset
 
-            # ベースライン: onset -2〜0秒
+            # Baseline: -2 to 0 s relative to onset
             bl = pupil_df[
                 (pupil_df["timestamp"] >= t0_unix - 2.0) &
                 (pupil_df["timestamp"] <  t0_unix)
             ]["diameter"]
 
-            # シグナル: onset +2〜6秒（固定窓）
-            # 全条件でベースラインから同じ時間後を計測 → 時間効果を除去
-            # Load5=5桁×2s=10s なので +2〜6s は確実にシーケンス内
+            # Signal: fixed window +2 to +6 s post-onset (same for all loads)
+            # Removing time-on-task confound; Load5=5×2s=10s so +2~6s is within sequence
             sig = pupil_df[
                 (pupil_df["timestamp"] >= t0_unix + 2.0) &
                 (pupil_df["timestamp"] <  t0_unix + 6.0)
@@ -125,8 +136,8 @@ def extract_pupil_per_load(pupil_df: pd.DataFrame,
 
 def get_eeg_t0(pupil_tsv: str, events_tsv: str) -> float:
     """
-    EEG t=0 の Unix 時刻を推定。
-    pupil 最初の timestamp - EEG 最初の有効 onset = t0_unix
+    Estimate Unix timestamp of EEG t=0.
+    t0_unix = first pupil timestamp - first valid EEG onset.
     """
     df = pd.read_csv(pupil_tsv, sep="\t", low_memory=False,
                      usecols=["pupil_timestamp"], nrows=100)
@@ -163,7 +174,7 @@ def analyze_subject(args):
 
 
 def run_all():
-    # pupil.tsv を持つ被験者を列挙
+    # Enumerate subjects with pupil.tsv
     pupil_files = sorted(glob.glob(
         os.path.join(EEG_DIR, "sub-*", "pupil", "*task-memory_pupil.tsv")))
     print(f"✅ pupil.tsv: {len(pupil_files)} 件")
@@ -211,7 +222,7 @@ def run_all():
 
     df = pd.DataFrame(rows)
 
-    # 3×IQR 外れ値を NaN に
+    # Replace 3×IQR outliers with NaN
     pupil_cols = [c for c in df.columns if c.startswith("pupil_load")]
     for col in pupil_cols:
         q1, q3 = df[col].quantile([0.25, 0.75])
@@ -219,8 +230,8 @@ def run_all():
         lo, hi = q1 - 3*iqr, q3 + 3*iqr
         mask = (df[col] < lo) | (df[col] > hi)
         if mask.sum() > 0:
-            print(f"  外れ値除去 {col}: {mask.sum()}件 "
-                  f"(範囲外: {df.loc[mask, 'subject'].values})")
+            print(f"  Outlier removal {col}: {mask.sum()} removed "
+                  f"(subjects: {df.loc[mask, 'subject'].values})")
             df.loc[mask, col] = np.nan
 
     out = os.path.join(FIGURES_DIR, "pupil_loads_ds003838.csv")
@@ -231,7 +242,7 @@ def run_all():
 
 def run_stats(df: pd.DataFrame):
     print("\n" + "=" * 55)
-    print("統計: Load 条件間の瞳孔径比較")
+    print("Statistics: Pupil diameter comparison across load conditions")
     print("=" * 55)
     loads = [5, 9, 13]
     cols  = [f"pupil_load{l}" for l in loads]
@@ -244,7 +255,7 @@ def run_stats(df: pd.DataFrame):
     for l, m, s in zip(loads, means, sems):
         print(f"  Load {l:2d}: {m:+.3f}% (SEM={s:.3f})")
 
-    # 線形傾向
+    # Linear trend
     if len(complete) >= 5:
         f, p_anova = stats.f_oneway(*[complete[c].values for c in cols])
         print(f"\n  ANOVA: F={f:.3f}, p={p_anova:.4f}")
@@ -257,7 +268,7 @@ def run_stats(df: pd.DataFrame):
             d = (paired[c1].mean()-paired[c2].mean()) / paired[c1].std()
             print(f"  L{l1}→L{l2}: t={t:.3f}, p={p:.4f}, d={d:.3f} (n={len(paired)})")
 
-    # TGC パターン判定
+    # TGC pattern classification
     diff_5_9  = means[1] - means[0]
     diff_9_13 = means[2] - means[1]
     if diff_5_9 > 0 and diff_9_13 < 0:
@@ -286,7 +297,7 @@ def plot_results(df: pd.DataFrame, complete, means, sems):
 
     colors = ["#2196F3","#FF9800","#F44336"]
 
-    # Panel A: 平均 ± SEM
+    # Panel A: Mean ± SEM
     ax_A = fig.add_subplot(gs[0,0])
     ax_A.errorbar(loads, means, yerr=sems, fmt="o-",
                   color="#37474F", lw=2.5, ms=9, capsize=5)
@@ -304,7 +315,7 @@ def plot_results(df: pd.DataFrame, complete, means, sems):
                   fontsize=8.5, va="top", style="italic", color="darkblue",
                   bbox=dict(boxstyle="round", fc="lightyellow", alpha=0.8))
 
-    # Panel B: スパゲッティ
+    # Panel B: Spaghetti plot (individual trajectories)
     ax_B = fig.add_subplot(gs[0,1])
     for _, row in complete.iterrows():
         vals = [row[c] for c in cols]
@@ -322,7 +333,7 @@ def plot_results(df: pd.DataFrame, complete, means, sems):
     ax_B.set_title(f"Individual trajectories (n={len(complete)})\n"
                    f"Red = Load9 peak ({n_peak9}/{len(complete)} subj.)", fontsize=11)
 
-    # Panel C: バイオリン
+    # Panel C: Violin plot
     ax_C = fig.add_subplot(gs[1,0])
     data_list = [complete[c].values for c in cols]
     parts = ax_C.violinplot(data_list, positions=loads, widths=2,
@@ -336,7 +347,7 @@ def plot_results(df: pd.DataFrame, complete, means, sems):
     ax_C.set_ylabel("Pupil diameter change (%)", fontsize=10)
     ax_C.set_title("Distribution", fontsize=11)
 
-    # Panel D: サマリー
+    # Panel D: Summary text box
     ax_D = fig.add_subplot(gs[1,1])
     ax_D.axis("off")
     diff_5_9  = means[1]-means[0]
@@ -371,10 +382,10 @@ def plot_results(df: pd.DataFrame, complete, means, sems):
 
 
 def main():
-    print("="*55)
+    print("=" * 55)
     print("TGC Model Study 1: Pupil Diameter Analysis")
     print("ds003838 memorize condition  n~86")
-    print("="*55)
+    print("=" * 55)
 
     df = run_all()
     if df is None:

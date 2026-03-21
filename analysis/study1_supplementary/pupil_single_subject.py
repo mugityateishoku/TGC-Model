@@ -1,13 +1,26 @@
+"""
+TGC Model: Study 1 Supplementary — Single-Subject Event-Related Pupillometry
+=============================================================================
+Computes baseline-corrected pupil dilation (Delta Pupil) for a single
+exemplar subject (sub-013) across cognitive load conditions (5 / 9 / 13 digits).
+
+Demonstrates the Overheating signature at the individual level:
+peak LC-NE arousal (pupil dilation) at Load 9, suppression at Load 13.
+
+Environment variables:
+    DS003838_DIR — path to ds003838-download dataset (default: ./ds003838-download)
+"""
+
 import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-DATASET_ROOT = 'ds003838-download'
+DATASET_ROOT = os.environ.get('DS003838_DIR', './ds003838-download')
 TARGET_SUB = 'sub-013'
 
-print("--- 🚀 究極の解析: Event-Related Pupillometry を実行中 ---\n")
+print("--- Event-Related Pupillometry: single-subject analysis ---\n")
 
 pupil_file = None
 events_file = None
@@ -21,10 +34,10 @@ for root, dirs, files in os.walk(DATASET_ROOT):
                 events_file = os.path.join(root, f)
 
 if not pupil_file or not events_file:
-    print("エラー: ファイルが見つかりません。")
+    print("Error: required files not found.")
     exit()
 
-# 1. データの読み込み
+# 1. Load data
 pupil_cols = ['pupil_timestamp', 'diameter_3d', 'confidence', 'blink']
 try:
     df_pupil = pd.read_csv(pupil_file, sep='\t', usecols=pupil_cols)
@@ -35,11 +48,11 @@ except ValueError:
 
 df_events = pd.read_csv(events_file, sep='\t')
 
-# 2. 瞳孔データの洗浄
+# 2. Clean pupil data
 clean_pupil = df_pupil[(df_pupil['confidence'] > 0.8) & (df_pupil['blink'] == 0)].copy()
 
-# 3. トリガーコードを用いたベースライン補正（Delta Pupilの計算）
-# 試行開始のトリガーコード
+# 3. Baseline-corrected pupil response (Delta Pupil) using trigger codes
+# Trigger codes marking trial onset
 start_triggers = {500105: 5, 500109: 9, 500113: 13}
 trial_starts = df_events[df_events['label'].isin(start_triggers.keys())].copy()
 
@@ -49,30 +62,30 @@ for _, row in trial_starts.iterrows():
     onset = row['timestamp']
     load = start_triggers[int(row['label'])]
     
-    # ベースライン: 試行開始の直前 1.0秒間
+    # Baseline: 1.0 s before trial onset
     base_mask = (clean_pupil['pupil_timestamp'] >= onset - 1.0) & (clean_pupil['pupil_timestamp'] < onset)
-    
-    # タスク中: 試行開始から、数字をすべて聞き終わるまでの時間
-    # (Pavlov et al. の実験デザイン: 1数字あたり約2秒の提示間隔)
-    task_duration = load * 2.0 
+
+    # Task period: onset to end of digit sequence
+    # (Pavlov et al. design: ~2 s per digit)
+    task_duration = load * 2.0
     task_mask = (clean_pupil['pupil_timestamp'] >= onset) & (clean_pupil['pupil_timestamp'] <= onset + task_duration)
-    
+
     baseline_pupil = clean_pupil.loc[base_mask, 'diameter_3d'].mean()
     task_pupil = clean_pupil.loc[task_mask, 'diameter_3d'].mean()
-    
-    # ベースライン補正（純粋なタスク誘発性の瞳孔反応）
+
+    # Baseline-corrected task-evoked pupil response
     if pd.notnull(baseline_pupil) and pd.notnull(task_pupil):
         delta_pupil = task_pupil - baseline_pupil
         results.append({'Load': load, 'Delta_Pupil': delta_pupil})
 
 df_results = pd.DataFrame(results)
 
-# 4. 統計サマリーの計算
+# 4. Statistical summary
 summary = df_results.groupby('Load')['Delta_Pupil'].agg(['mean', 'sem']).reset_index()
-print("【ベースライン補正後の純粋な瞳孔応答 (Delta Pupil)】")
+print("Baseline-corrected task-evoked pupil response (Delta Pupil):")
 print(summary)
 
-# 5. 逆U字型（メルトダウン）の可視化
+# 5. Visualize inverted-U pattern (Overheating / attractor collapse)
 plt.figure(figsize=(9, 6))
 
 # Load 5 -> 9 -> 13 のプロット
@@ -84,7 +97,7 @@ plt.title('Catastrophic Meltdown of LC-NE Gain (TGC Model)', fontsize=18, fontwe
 plt.xlabel('Cognitive Load $E$ (Digit Span)', fontsize=14)
 plt.ylabel('Task-Evoked Pupil Response ($\Delta$ Diameter)', fontsize=14)
 
-# 領域の色分け
+# Shade cognitive load regions
 plt.axvspan(4, 7, color='green', alpha=0.1)
 plt.text(5, plt.ylim()[1]*0.9, 'Focus\n(Bistable)', ha='center', color='green', fontweight='bold')
 

@@ -1,3 +1,15 @@
+"""
+TGC Model: Study 1 Supplementary — GMM Bimodality and Hysteresis Analysis
+==========================================================================
+Fits a Gaussian Mixture Model (GMM) to reaction time data to test for
+bistability (Prediction 1: bimodal RT distribution under load).
+Also computes empirical potential landscape V(x) and a circular-shift
+permutation test for hysteresis in the RT × load trajectory.
+
+Input: tgc_master_dataset.csv (pre-processed behavioral data)
+Columns required: Condition (load level), RT (reaction time in ms)
+"""
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,29 +20,29 @@ filename = 'tgc_master_dataset.csv'
 
 try:
     df = pd.read_csv(filename)
-    print(f"'{filename}' の読み込みに成功しました！")
+    print(f"Loaded '{filename}' successfully.")
 except FileNotFoundError:
-    print(f"エラー: {filename} が見つかりません。")
+    print(f"Error: {filename} not found.")
     exit()
 
 # ==========================================
-# ★ここが最重要：時系列を壊さずに負荷(E)を計算する
-# Condition (1 or 2) の移動平均を「Cognitive Load (E)」とする
+# CRITICAL: compute cognitive load (E) without breaking the time series
+# Use rolling mean of Condition (1 or 2) as "Cognitive Load (E)"
 # ==========================================
 WINDOW_SIZE = 10
 df['E'] = df['Condition'].rolling(window=WINDOW_SIZE, min_periods=1).mean()
 
-# E と RT が揃っている試行だけを抽出（時間軸はEが保持している）
+# Keep only trials with both E and RT available (time axis preserved by E)
 valid_data = df.dropna(subset=['RT', 'E']).copy()
 valid_rt = valid_data['RT'].values
 valid_E = valid_data['E'].values
 
-print(f"解析対象データ数: {len(valid_rt)} 試行")
+print(f"Trials included in analysis: {len(valid_rt)}")
 
 # ==========================================
 # 1. GMM & BIC 分析
 # ==========================================
-print("\n--- 1. GMM & BIC 分析 ---")
+print("\n--- 1. GMM & BIC Analysis ---")
 rt_reshaped = valid_rt.reshape(-1, 1)
 
 gmm1 = GaussianMixture(n_components=1, random_state=42).fit(rt_reshaped)
@@ -42,14 +54,14 @@ bic2 = gmm2.bic(rt_reshaped)
 print(f"BIC (1-Component) : {bic1:.2f}")
 print(f"BIC (2-Components): {bic2:.2f}")
 if bic2 < bic1:
-    print("結論: データは圧倒的に『2つの状態（二峰性）』を支持しています！")
+    print("Conclusion: Data strongly support two states (bimodal distribution).")
 else:
-    print("結論: 全体としては単一の分布で説明可能です。")
+    print("Conclusion: Data are consistent with a single unimodal distribution.")
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
 # ==========================================
-# 2. 経験的ポテンシャル地形 V(x)
+# 2. Empirical potential landscape V(x)
 # ==========================================
 hist, bin_edges = np.histogram(valid_rt, bins=25, density=True)
 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
@@ -64,9 +76,9 @@ ax1.set_ylabel('Potential Energy $V(x) \propto -\ln P(x)$')
 ax1.grid(True, linestyle='--', alpha=0.5)
 
 # ==========================================
-# 3. 厳密なヒステリシス検定
+# 3. Rigorous hysteresis test
 # ==========================================
-print("\n--- 3. 厳密なヒステリシス検定 ---")
+print("\n--- 3. Rigorous Hysteresis Test ---")
 
 def calculate_hysteresis_area(E_seq, beta_seq, n_bins=8):
     delta_E = np.diff(E_seq)
@@ -84,7 +96,7 @@ def calculate_hysteresis_area(E_seq, beta_seq, n_bins=8):
     valid_asc = ~np.isnan(y_asc)
     valid_desc = ~np.isnan(y_desc)
     
-    # 共通区間のみを抽出
+    # Restrict to bins with data in both ascending and descending phases
     common = valid_asc & valid_desc
     
     area = 0.0
@@ -97,9 +109,9 @@ def calculate_hysteresis_area(E_seq, beta_seq, n_bins=8):
     return area, bin_centers, y_asc, y_desc, valid_asc, valid_desc, common
 
 actual_area, centers, y_asc, y_desc, v_asc, v_desc, common_mask = calculate_hysteresis_area(valid_E, valid_rt)
-print(f"実際のヒステリシス面積 (共通区間): {actual_area:.2f}")
+print(f"Observed hysteresis area (common bins): {actual_area:.2f}")
 
-# Circular Shift 検定
+# Circular shift permutation test
 np.random.seed(42)
 n_permutations = 1000
 null_areas = []
@@ -113,9 +125,9 @@ for _ in range(n_permutations):
 
 null_areas = np.array(null_areas)
 p_value = np.mean(np.abs(null_areas) >= np.abs(actual_area))
-print(f"厳密な Circular Shift 検定 p値 : {p_value:.4f}")
+print(f"Circular shift permutation test p-value: {p_value:.4f}")
 
-# プロット
+# Plot
 ax2.plot(centers[v_asc], y_asc[v_asc], color='red', marker='^', linewidth=2.5, markersize=8, label='Ascending ($\Delta E > 0$)')
 ax2.plot(centers[v_desc], y_desc[v_desc], color='blue', marker='v', linewidth=2.5, markersize=8, label='Descending ($\Delta E \leq 0$)')
 

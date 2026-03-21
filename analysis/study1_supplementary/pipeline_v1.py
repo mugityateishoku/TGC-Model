@@ -1,14 +1,15 @@
 """
-TGC Model — Comprehensive Plausibility Check Pipeline (Windows対応版)
-ds003838 (OpenNeuro)
+TGC Model: Study 1 Supplementary — Comprehensive Plausibility Check Pipeline (v1)
+==================================================================================
+Full statistical and visualization pipeline for Study 1 (ds003838, OpenNeuro).
+Computes Friedman test (accuracy across loads), Hartigan dip test (bistability),
+Levene test (variance heterogeneity), Spearman correlations (load × RT-IIV,
+pupil × RT-IIV), and order effects (hysteresis proxy). Generates Figure 5
+(Overheating signature) and Figure 8 (potential landscape).
 
-修正点 vs. 前バージョン:
-  1. 出力パスをWindows対応に変更（カレントディレクトリに出力）
-  2. RT列の自動検出を強化（rt, response_time, ReactionTime など）
-  3. RT-IIV NaN問題の修正: 列存在チェックと数値変換を厳密化
-  4. Pupil列がbeh.tsvにない場合の適切なスキップ処理
-  5. 列名デバッグ出力を追加（最初の1ファイルの列名を表示）
-  6. 統計サマリーCSVをカレントディレクトリに保存
+Environment variables:
+    DS003838_DIR    — path to ds003838-download dataset (default: ./ds003838-download)
+    TGC_FIGURES_DIR — output directory for figures (default: current directory)
 """
 
 import os
@@ -22,8 +23,8 @@ from scipy import stats
 from scipy.stats import friedmanchisquare, levene, spearmanr
 from pathlib import Path
 
-# ── 出力ディレクトリ（カレントディレクトリ、Windows対応）────
-OUTPUT_DIR = Path('.')
+# Output directory (defaults to current directory; override with TGC_FIGURES_DIR)
+OUTPUT_DIR = Path(os.environ.get('TGC_FIGURES_DIR', '.'))
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 try:
@@ -31,7 +32,7 @@ try:
     HAS_DIPTEST = True
 except ImportError:
     HAS_DIPTEST = False
-    print("diptest未インストール: pip install diptest")
+    print("diptest not installed: pip install diptest")
 
 np.random.seed(42)
 
@@ -44,11 +45,11 @@ plt.rcParams.update({
 })
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SECTION 0: データロード
+# SECTION 0: Data loading
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DATASET_ROOT = 'ds003838-download'
+DATASET_ROOT = os.environ.get('DS003838_DIR', './ds003838-download')
 
-print(f"📂 データセット読み込み中: {DATASET_ROOT}")
+print(f"Loading dataset: {DATASET_ROOT}")
 all_data   = []
 file_count = 0
 first_file = True
@@ -68,9 +69,9 @@ for root, dirs, files in os.walk(DATASET_ROOT):
         try:
             df_raw = pd.read_csv(filepath, sep='\t')
 
-            # ── 最初のファイルで列名を確認 ────────────────────
+            # Print column names from first file for diagnostics
             if first_file:
-                print(f"\n📋 列名サンプル ({file}):")
+                print(f"\nColumn names sample ({file}):")
                 print(f"   {list(df_raw.columns)}\n")
                 first_file = False
 
@@ -81,15 +82,15 @@ for root, dirs, files in os.walk(DATASET_ROOT):
                 df_raw['participant_id'] = (
                     f'sub-{match.group(1)}' if match else 'unknown')
 
-            # ── condition（負荷レベル）────────────────────────
+            # ── condition (load level) ────────────────────────
             if 'condition' not in df_raw.columns:
-                print(f"  スキップ（condition列なし）: {file}")
+                print(f"  Skipping (no condition column): {file}")
                 continue
             df_raw['condition'] = pd.to_numeric(
                 df_raw['condition'], errors='coerce')
             df_raw = df_raw[df_raw['condition'] > 0].copy()
 
-            # ── Accuracy計算 ──────────────────────────────────
+            # ── Accuracy ──────────────────────────────────────
             if 'partialScore' in df_raw.columns:
                 df_raw['Accuracy'] = np.clip(
                     pd.to_numeric(df_raw['partialScore'], errors='coerce')
@@ -102,7 +103,7 @@ for root, dirs, files in os.walk(DATASET_ROOT):
                     df_raw['Accuracy'] = (
                         pd.to_numeric(df_raw[corr_col], errors='coerce') * 100)
                 else:
-                    print(f"  スキップ（Accuracy列なし）: {file}")
+                    print(f"  Skipping (no accuracy column): {file}")
                     continue
 
             # ── RT ────────────────────────────────────────────
@@ -110,11 +111,11 @@ for root, dirs, files in os.walk(DATASET_ROOT):
                 (c for c in RT_COLS if c in df_raw.columns), None)
             if rt_col:
                 df_raw['rt'] = pd.to_numeric(df_raw[rt_col], errors='coerce')
-                # 秒→ms変換（中央値が10未満なら秒単位と判断）
+                # Convert s -> ms if median < 10 (assumes seconds)
                 rt_median = df_raw['rt'].median()
                 if pd.notna(rt_median) and rt_median < 10:
                     df_raw['rt'] *= 1000
-                    print(f"  RT単位を秒→msに変換: {file}")
+                    print(f"  RT unit converted s -> ms: {file}")
             else:
                 df_raw['rt'] = np.nan
 
@@ -134,35 +135,35 @@ for root, dirs, files in os.walk(DATASET_ROOT):
             file_count += 1
 
         except Exception as e:
-            print(f"  スキップ: {file} ({e})")
+            print(f"  Skipping: {file} ({e})")
 
 if not all_data:
-    print("❌ データを抽出できませんでした。")
+    print("Error: no data could be loaded.")
     sys.exit(1)
 
 master_df = pd.concat(all_data, ignore_index=True)
 master_df = master_df.dropna(subset=['condition', 'Accuracy'])
 n_subs    = master_df['participant_id'].nunique()
-print(f"✅ {file_count}ファイル, {len(master_df)}試行, {n_subs}被験者")
+print(f"Loaded: {file_count} files, {len(master_df)} trials, {n_subs} subjects")
 
-# RT・Pupilのカバレッジを確認
+# Check RT and pupil coverage
 rt_coverage    = master_df['rt'].notna().mean() * 100
 pupil_coverage = master_df['pupil_diameter'].notna().mean() * 100
-print(f"   RT カバレッジ:    {rt_coverage:.1f}%")
-print(f"   Pupil カバレッジ: {pupil_coverage:.1f}%")
+print(f"   RT coverage:    {rt_coverage:.1f}%")
+print(f"   Pupil coverage: {pupil_coverage:.1f}%")
 
 if rt_coverage < 5:
-    print("   ⚠️  RTデータがほぼ存在しません。beh.tsvの列名を確認してください。")
+    print("   Warning: RT data nearly absent — check column names in beh.tsv.")
 if pupil_coverage < 5:
-    print("   ⚠️  Pupilデータはbeh.tsvにない可能性があります（生理データは別ファイル）。")
+    print("   Note: pupil data likely not in beh.tsv (check physio/*.tsv).")
 
 DATA_NOTE = "ds003838 (OpenNeuro)"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SECTION 1: 集計
+# SECTION 1: Aggregation
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 loads_all = sorted(master_df['condition'].unique())
-print(f"\n負荷条件: {[int(L) for L in loads_all]}")
+print(f"\nLoad conditions: {[int(L) for L in loads_all]}")
 
 sub_load_acc = (
     master_df
@@ -187,15 +188,15 @@ merged = (sub_load_acc
           .merge(sub_load_pupil, on=['participant_id','condition'], how='left'))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SECTION 2: 統計検定
+# SECTION 2: Statistical tests
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 stats_results = {}
 print("\n" + "="*60)
-print("統計検定結果")
+print("Statistical test results")
 print("="*60)
 
-# (a) Friedman検定
-print("\n(a) Friedman検定 — 負荷間Accuracy差")
+# (a) Friedman test: accuracy differences across loads
+print("\n(a) Friedman test — accuracy across load conditions")
 pivot_acc = sub_load_acc.pivot(
     index='participant_id', columns='condition',
     values='acc_mean').dropna()
@@ -205,8 +206,8 @@ if pivot_acc.shape[1] >= 2:
     print(f"  χ²({pivot_acc.shape[1]-1}) = {stat_f:.3f},  p = {p_f:.4f}")
     stats_results['friedman_acc'] = {'stat': stat_f, 'p': p_f}
 
-# (b) Dip検定
-print("\n(b) Hartigan Dip検定 — 二峰性（Bistability, Prediction 1）")
+# (b) Hartigan dip test: bimodality (Bistability, Prediction 1)
+print("\n(b) Hartigan dip test — bimodality (Prediction 1)")
 for load in loads_all:
     acc_vals = master_df[master_df['condition']==load]['Accuracy'].dropna().values
     if HAS_DIPTEST and len(acc_vals) >= 10:
@@ -216,10 +217,10 @@ for load in loads_all:
         stats_results[f'dip_load{int(load)}'] = {'dip': d, 'p': p_d}
     else:
         kurt = stats.kurtosis(acc_vals)
-        print(f"  Load {int(load):2d}: 尖度={kurt:.3f}")
+        print(f"  Load {int(load):2d}: kurtosis={kurt:.3f}")
 
-# (c) Levene検定
-print("\n(c) Levene検定 — 分散の負荷間差")
+# (c) Levene test: variance heterogeneity across loads
+print("\n(c) Levene test — variance differences across loads")
 groups_acc = [
     master_df[master_df['condition']==L]['Accuracy'].dropna().values
     for L in loads_all
@@ -227,36 +228,36 @@ groups_acc = [
 if len(groups_acc) >= 2:
     stat_l, p_l = levene(*groups_acc)
     print(f"  F = {stat_l:.3f},  p = {p_l:.4f}  "
-          f"{'✅ 分散に有意差あり' if p_l < 0.05 else 'n.s.'}")
+          f"{'significant variance difference' if p_l < 0.05 else 'n.s.'}")
     stats_results['levene_acc'] = {'stat': stat_l, 'p': p_l}
 
-# (d) Spearman: 負荷 × RT-IIV
-print("\n(d) Spearman相関 — 負荷 × RT-IIV")
+# (d) Spearman: load × RT-IIV
+print("\n(d) Spearman correlation — load × RT-IIV")
 iiv_by_load = merged.groupby('condition')['rt_iiv'].mean().dropna()
 if len(iiv_by_load) >= 3:
     rho_d, p_d2 = spearmanr(iiv_by_load.index, iiv_by_load.values)
-    sig = "✅ 有意な単調増加" if (p_d2 < 0.05 and rho_d > 0) else "n.s./逆方向"
+    sig = "significant monotonic increase" if (p_d2 < 0.05 and rho_d > 0) else "n.s./opposite direction"
     print(f"  ρ = {rho_d:.3f},  p = {p_d2:.4f}  {sig}")
     stats_results['spearman_iiv'] = {'rho': rho_d, 'p': p_d2}
 else:
-    print("  ⚠️  RTデータが不足（RT列が見つからない可能性）")
-    print(f"  RT-IIVの有効データ数: {merged['rt_iiv'].notna().sum()}")
+    print("  Warning: insufficient RT data (RT column may be missing)")
+    print(f"  Valid RT-IIV entries: {merged['rt_iiv'].notna().sum()}")
 
-# (e) Pupil × RT-IIV
-print("\n(e) Spearman相関 — Pupil × RT-IIV（Overheating）")
+# (e) Pupil × RT-IIV (Overheating signature)
+print("\n(e) Spearman correlation — Pupil × RT-IIV (Overheating)")
 pupil_iiv = merged.dropna(subset=['pupil_mean', 'rt_iiv'])
 if len(pupil_iiv) >= 10:
     rho_p, p_p = spearmanr(pupil_iiv['pupil_mean'], pupil_iiv['rt_iiv'])
-    sig = "✅ 同時増大を確認" if (p_p < 0.05 and rho_p > 0) else "n.s./逆方向"
+    sig = "co-elevation confirmed" if (p_p < 0.05 and rho_p > 0) else "n.s./opposite direction"
     print(f"  ρ = {rho_p:.3f},  p = {p_p:.4f}  {sig}")
     stats_results['overheating_corr'] = {'rho': rho_p, 'p': p_p}
 else:
-    print(f"  ⚠️  有効データが{len(pupil_iiv)}行（Pupilデータはbeh.tsvに含まれない可能性）")
-    print("      → physio/*.tsv または eye tracking ファイルを確認してください")
+    print(f"  Warning: only {len(pupil_iiv)} valid rows (pupil data may not be in beh.tsv)")
+    print("      → Check physio/*.tsv or eye tracking files")
 
-# (f) 順序効果
-print("\n(f) 順序効果検定 — Hysteresis探索（Prediction 2、参考値）")
-print("    ⚠️  ds003838はcounterbalanced設計ではないため参考値のみ")
+# (f) Order effect (hysteresis proxy, Prediction 2)
+print("\n(f) Order effect — Hysteresis proxy (Prediction 2, exploratory)")
+print("    Note: ds003838 is not counterbalanced; treat as exploratory only")
 if 9 in loads_all:
     df9       = master_df[master_df['condition']==9].copy()
     med_idx   = df9['trial_index'].median()
@@ -271,14 +272,14 @@ if 9 in loads_all:
         stats_results['hysteresis_proxy'] = {
             'U': stat_h, 'p': p_h, 'cohen_d': cohen_d}
 
-# 統計サマリー保存（カレントディレクトリ）
-stats_df = pd.DataFrame([{'検定': k, **v} for k, v in stats_results.items()])
+# Save statistical summary
+stats_df = pd.DataFrame([{'test': k, **v} for k, v in stats_results.items()])
 csv_path = OUTPUT_DIR / 'TGC_stats_summary.csv'
 stats_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
 print(f"\n✅ 統計サマリー保存: {csv_path}")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SECTION 3: Figure 8 — ポテンシャル地形
+# SECTION 3: Figure 8 — Potential landscape
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 target_loads = [L for L in [5, 9, 13] if L in loads_all]
 fig_colors   = {5:'#009E73', 9:'#E69F00', 13:'#D55E00'}
@@ -358,7 +359,7 @@ fig8.savefig(OUTPUT_DIR / 'Figure8_potential_landscape.tiff',
 print(f"✅ Figure8 保存: {fig8_path}")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# SECTION 4: Figure 5 — Overheatingシグネチャ
+# SECTION 4: Figure 5 — Overheating signature
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COLLAPSE_LOAD = max(loads_all)
 C_PUPIL    = '#0072B2'
@@ -386,8 +387,8 @@ for ax, (col, ylabel, title, color, marker) in zip(axes5, [
 
     if len(valid_s) == 0:
         ax.text(0.5, 0.5,
-                f'データなし\n({col}がbeh.tsvに含まれない)\n'
-                '生理データファイルを確認してください',
+                f'No data\n({col} not in beh.tsv)\n'
+                'Check physio files',
                 ha='center', va='center', transform=ax.transAxes,
                 fontsize=10, color='grey',
                 bbox=dict(boxstyle='round', fc='lightyellow', ec='grey'))
@@ -450,9 +451,9 @@ fig5.savefig(OUTPUT_DIR / 'Figure5_overheating.tiff',
 print(f"✅ Figure5 保存: {fig5_path}")
 
 print("\n" + "="*60)
-print("全解析完了")
+print("Analysis complete")
 print("="*60)
-print(f"出力先: {OUTPUT_DIR.resolve()}")
+print(f"Output directory: {OUTPUT_DIR.resolve()}")
 print("  TGC_stats_summary.csv")
 print("  Figure5_overheating.pdf / .tiff")
 print("  Figure8_potential_landscape.pdf / .tiff")
