@@ -1,3 +1,20 @@
+"""
+TGC Model — Deterministic Bifurcation and Hysteresis Demo
+==========================================================
+Harada (2026): Thermostatic Gain Control Model
+
+Demonstrates the deterministic (σ=0) cusp-catastrophe behavior:
+  - Adiabatic tracking of stable equilibria under load ramp
+  - Hysteresis loop (A = ∮β dE > 0) for different Ω values
+  - Critical bifurcation points E_crit = √(4Ω³/27)
+
+This is the noiseless limit of Eq. 1 (σ → 0). For the full
+stochastic simulation, see tgc_langevin.py.
+
+Usage:
+    python simulation/cusp_deterministic.py
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 
